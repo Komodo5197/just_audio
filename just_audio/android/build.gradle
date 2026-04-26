@@ -44,7 +44,7 @@ android {
     }
 
     lintOptions {
-        disable 'AndroidGradlePluginVersion', 'InvalidPackage', 'GradleDependency', 'NewerVersionAvailable'
+        disable 'AndroidGradlePluginVersion', 'InvalidPackage', 'GradleDependency', 'NewerVersionAvailable', 'UnsafeOptInUsageError'
     }
 }
 dependencies {

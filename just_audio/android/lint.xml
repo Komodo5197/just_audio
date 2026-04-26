@@ -1,0 +1,5 @@
+<lint>
+    <issue id="UnsafeOptInUsageError">
+        <option name="opt-in" value="com.foo.ExperimentalBarAnnotation">
+        </option></issue>
+</lint>

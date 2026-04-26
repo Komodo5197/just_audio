@@ -33,6 +33,7 @@ android {
 
     lint {
         disable 'InvalidPackage'
+        disable 'UnsafeOptInUsageError'
     }
 }
 

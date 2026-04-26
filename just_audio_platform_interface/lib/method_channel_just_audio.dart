@@ -11,7 +11,7 @@ class MethodChannelJustAudio extends JustAudioPlatform {
   @override
   Future<AudioPlayerPlatform> init(InitRequest request) async {
     await _mainChannel.invokeMethod<void>('init', request.toMap());
-    return MethodChannelAudioPlayer(request.id);
+    return MethodChannelAudioPlayer(request.id, request.resolverCallback);
   }
 
   @override
@@ -34,10 +34,27 @@ class MethodChannelJustAudio extends JustAudioPlatform {
 /// An implementation of [AudioPlayerPlatform] that uses method channels.
 class MethodChannelAudioPlayer extends AudioPlayerPlatform {
   final MethodChannel _channel;
+  final URIResolverCallback? _resolver;
 
-  MethodChannelAudioPlayer(String id)
+  MethodChannelAudioPlayer(String id, URIResolverCallback? resolver)
       : _channel = MethodChannel('com.ryanheise.just_audio.methods.$id'),
-        super(id);
+        _resolver = resolver,
+        super(id) {
+    _channel.setMethodCallHandler(_methodCallHandler);
+  }
+
+  Future<Object?> _methodCallHandler(MethodCall call) async {
+    if (_resolver == null) {
+      throw UnimplementedError('No URIResolverCallback registered');
+    }
+    switch (call.method) {
+      case 'resolveURI':
+        final id = (call.arguments as Map)['id'] as String;
+        return await _resolver!(id);
+      default:
+        throw UnimplementedError('Unimplemented method: ${call.method}');
+    }
+  }
 
   @override
   Stream<PlaybackEventMessage> get playbackEventMessageStream =>

@@ -8,7 +8,13 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.media3.common.C;
+import androidx.media3.datasource.DataSpec;
+import androidx.media3.datasource.ResolvingDataSource;
 import androidx.media3.exoplayer.DefaultLivePlaybackSpeedControl;
 import androidx.media3.exoplayer.DefaultLoadControl;
 import androidx.media3.exoplayer.DefaultRenderersFactory;
@@ -23,7 +29,6 @@ import androidx.media3.common.Player.PositionInfo;
 import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.common.Timeline;
 import androidx.media3.common.Tracks;
-import androidx.media3.common.TrackSelectionParameters;
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.exoplayer.NoSampleRenderer;
@@ -46,7 +51,6 @@ import androidx.media3.exoplayer.source.SilenceMediaSource; // Deprecated
 import androidx.media3.common.TrackGroup;
 import androidx.media3.exoplayer.dash.DashMediaSource; // Deprecated
 import androidx.media3.exoplayer.hls.HlsMediaSource; // Deprecated
-import androidx.media3.exoplayer.trackselection.TrackSelectionArray;
 import androidx.media3.datasource.DataSource;
 import androidx.media3.datasource.DefaultDataSource;
 import androidx.media3.datasource.DefaultHttpDataSource;
@@ -54,8 +58,6 @@ import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.Util;
 import io.flutter.Log;
 import io.flutter.plugin.common.BinaryMessenger;
-import io.flutter.plugin.common.EventChannel;
-import io.flutter.plugin.common.EventChannel.EventSink;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
@@ -63,12 +65,13 @@ import io.flutter.plugin.common.MethodChannel.Result;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 
 public class AudioPlayer implements MethodCallHandler, Player.Listener, MetadataOutput {
     public static final int ERROR_ABORT = 10000000;
@@ -583,11 +586,13 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         Map<?, ?> map = (Map<?, ?>)json;
         String id = mapGet(map, "id");
         MediaSource mediaSource = mediaSources.get(id);
+        ShuffleOrder shuffleOrder = decodeShuffleOrder(mapGet(map, "shuffleOrder"));
+        player.setShuffleOrder(shuffleOrder);
         if (mediaSource == null) return;
         switch ((String)mapGet(map, "type")) {
         case "concatenating":
             androidx.media3.exoplayer.source.ConcatenatingMediaSource concatenatingMediaSource = (androidx.media3.exoplayer.source.ConcatenatingMediaSource)mediaSource;
-            concatenatingMediaSource.setShuffleOrder(decodeShuffleOrder(mapGet(map, "shuffleOrder")));
+            concatenatingMediaSource.setShuffleOrder(shuffleOrder);
             List<Object> children = mapGet(map, "children");
             for (Object child : children) {
                 setShuffleOrder(child);
@@ -635,20 +640,20 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         String id = (String)map.get("id");
         switch ((String)map.get("type")) {
         case "progressive":
-            return new ProgressiveMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers")), buildExtractorsFactory(mapGet(map, "options")))
+            return new ProgressiveMediaSource.Factory(buildDataSourceFactory(id,mapGet(map, "headers"),mapGet(map, "resolver")), buildExtractorsFactory(mapGet(map, "options")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setTag(id)
                             .build());
         case "dash":
-            return new DashMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers")))
+            return new DashMediaSource.Factory(buildDataSourceFactory(id,mapGet(map, "headers"),mapGet(map, "resolver")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setMimeType(MimeTypes.APPLICATION_MPD)
                             .setTag(id)
                             .build());
         case "hls":
-            return new HlsMediaSource.Factory(buildDataSourceFactory(mapGet(map, "headers")))
+            return new HlsMediaSource.Factory(buildDataSourceFactory(id,mapGet(map, "headers"),mapGet(map, "resolver")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setMimeType(MimeTypes.APPLICATION_M3U8)
@@ -728,7 +733,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         audioEffectsMap.clear();
     }
 
-    private DataSource.Factory buildDataSourceFactory(Map<?, ?> headers) {
+    private DataSource.Factory buildDataSourceFactory(String id,Map<?, ?> headers, String resolver) {
         final Map<String, String> stringHeaders = castToStringMap(headers);
         String userAgent = null;
         if (stringHeaders != null) {
@@ -741,12 +746,63 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             userAgent = Util.getUserAgent(context, "just_audio");
         }
         DefaultHttpDataSource.Factory httpDataSourceFactory = new DefaultHttpDataSource.Factory()
-            .setUserAgent(userAgent)
-            .setAllowCrossProtocolRedirects(true);
-        if (stringHeaders != null && stringHeaders.size() > 0) {
+                .setUserAgent(userAgent)
+                .setAllowCrossProtocolRedirects(true);
+        if (stringHeaders != null && !stringHeaders.isEmpty()) {
             httpDataSourceFactory.setDefaultRequestProperties(stringHeaders);
         }
-        return new DefaultDataSource.Factory(context, httpDataSourceFactory);
+        DataSource.Factory factory = getHttpFactory(id,resolver, httpDataSourceFactory);
+
+        return new DefaultDataSource.Factory(context, factory);
+    }
+
+    private DataSource.Factory getHttpFactory(String id,String resolver, DefaultHttpDataSource.Factory httpDataSourceFactory) {
+        DataSource.Factory factory;
+        if(resolver ==null){
+            factory= httpDataSourceFactory;
+        }
+        else{
+            ResolvingDataSource.Resolver resolver2 = new ResolvingDataSource.Resolver() {
+                @NonNull
+                @RequiresApi(api = Build.VERSION_CODES.N)
+                @Override
+                public DataSpec resolveDataSpec(DataSpec dataSpec) throws IOException {
+                    CompletableFuture<String> future = new CompletableFuture<>();
+                    handler.post(() -> {
+                        Result result = new Result() {
+                            @Override
+                            public void success(@Nullable Object result) {
+                                assert result != null;
+                                future.complete((String) result);
+                            }
+
+                            @Override
+                            public void error(@NonNull String errorCode, @Nullable String errorMessage, @Nullable Object errorDetails) {
+                                future.completeExceptionally(new Throwable(errorMessage));
+                            }
+
+                            @Override
+                            public void notImplemented() {
+                                future.completeExceptionally(new Throwable("Method not implemented."));
+                            }
+                        };
+                        HashMap<String, Object> arguments = new HashMap<>();
+                        arguments.put("id", id);
+                        methodChannel.invokeMethod("resolveURI",arguments,result);
+                    });
+                    try {
+                        String newURI = future.get();
+                        return dataSpec.withUri(Uri.parse(newURI));
+                    } catch (ExecutionException e) {
+                        return dataSpec;
+                    } catch (InterruptedException e) {
+                        return dataSpec;
+                    }
+                }
+            };
+            factory = new ResolvingDataSource.Factory(new DefaultHttpDataSource.Factory(),resolver2);
+        }
+        return factory;
     }
 
     private void load(final List<MediaSource> mediaSources, ShuffleOrder shuffleOrder, final long initialPosition, final Integer initialIndex, final Result result) {

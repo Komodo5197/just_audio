@@ -4,6 +4,8 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'method_channel_just_audio.dart';
 
+typedef URIResolverCallback = Future<String> Function(String id);
+
 /// The interface that implementations of just_audio must implement.
 ///
 /// Platform implementations should extend this class rather than implement it
@@ -413,6 +415,7 @@ class InitRequest {
   final AudioLoadConfigurationMessage? audioLoadConfiguration;
   final List<AudioEffectMessage> androidAudioEffects;
   final List<AudioEffectMessage> darwinAudioEffects;
+  final URIResolverCallback? resolverCallback;
 
   final AndroidAudioOffloadPreferencesMessage? androidAudioOffloadPreferences;
   final bool? androidOffloadSchedulingEnabled;
@@ -426,6 +429,7 @@ class InitRequest {
     this.androidAudioOffloadPreferences,
     this.androidOffloadSchedulingEnabled,
     this.useLazyPreparation = true,
+    this.resolverCallback,
   });
 
   Map<dynamic, dynamic> toMap() => <dynamic, dynamic>{
@@ -1159,13 +1163,14 @@ abstract class IndexedAudioSourceMessage extends AudioSourceMessage {
 abstract class UriAudioSourceMessage extends IndexedAudioSourceMessage {
   final String uri;
   final Map<String, String>? headers;
+  final String? resolver;
 
-  UriAudioSourceMessage({
-    required super.id,
-    required this.uri,
-    this.headers,
-    super.tag,
-  });
+  UriAudioSourceMessage(
+      {required super.id,
+      required this.uri,
+      this.headers,
+      this.resolver,
+      super.tag});
 }
 
 /// Information about a progressive audio source to be communicated with the
@@ -1173,13 +1178,13 @@ abstract class UriAudioSourceMessage extends IndexedAudioSourceMessage {
 class ProgressiveAudioSourceMessage extends UriAudioSourceMessage {
   final ProgressiveAudioSourceOptionsMessage? options;
 
-  ProgressiveAudioSourceMessage({
-    required super.id,
-    required super.uri,
-    super.headers,
-    super.tag,
-    this.options,
-  });
+  ProgressiveAudioSourceMessage(
+      {required super.id,
+      required super.uri,
+      super.headers,
+      super.tag,
+      this.options,
+      super.resolver});
 
   @override
   Map<dynamic, dynamic> toMap() => <dynamic, dynamic>{
@@ -1188,18 +1193,19 @@ class ProgressiveAudioSourceMessage extends UriAudioSourceMessage {
         'uri': uri,
         'headers': headers,
         'options': options?.toMap(),
+        'resolver': resolver
       };
 }
 
 /// Information about a DASH audio source to be communicated with the platform
 /// implementation.
 class DashAudioSourceMessage extends UriAudioSourceMessage {
-  DashAudioSourceMessage({
-    required super.id,
-    required super.uri,
-    super.headers,
-    super.tag,
-  });
+  DashAudioSourceMessage(
+      {required super.id,
+      required super.uri,
+      super.headers,
+      super.tag,
+      super.resolver});
 
   @override
   Map<dynamic, dynamic> toMap() => <dynamic, dynamic>{
@@ -1207,18 +1213,19 @@ class DashAudioSourceMessage extends UriAudioSourceMessage {
         'id': id,
         'uri': uri,
         'headers': headers,
+        'resolver': resolver
       };
 }
 
 /// Information about a HLS audio source to be communicated with the platform
 /// implementation.
 class HlsAudioSourceMessage extends UriAudioSourceMessage {
-  HlsAudioSourceMessage({
-    required super.id,
-    required super.uri,
-    super.headers,
-    super.tag,
-  });
+  HlsAudioSourceMessage(
+      {required super.id,
+      required super.uri,
+      super.headers,
+      super.tag,
+      super.resolver});
 
   @override
   Map<dynamic, dynamic> toMap() => <dynamic, dynamic>{
@@ -1226,6 +1233,7 @@ class HlsAudioSourceMessage extends UriAudioSourceMessage {
         'id': id,
         'uri': uri,
         'headers': headers,
+        'resolver': resolver
       };
 }
 
