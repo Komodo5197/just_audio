@@ -34,6 +34,7 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.exoplayer.NoSampleRenderer;
 import androidx.media3.exoplayer.Renderer;
 import androidx.media3.exoplayer.RenderersFactory;
+import androidx.media3.exoplayer.source.MaskingMediaSource;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.common.Metadata;
 import androidx.media3.exoplayer.metadata.MetadataOutput;
@@ -65,6 +66,7 @@ import io.flutter.plugin.common.MethodChannel.Result;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -73,7 +75,7 @@ import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-public class AudioPlayer implements MethodCallHandler, Player.Listener, MetadataOutput {
+public class AudioPlayer implements MethodCallHandler, Player.Listener, MetadataOutput, LazyMediaSourceProvider {
     public static final int ERROR_ABORT = 10000000;
 
     static final String TAG = "AudioPlayer";
@@ -433,6 +435,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         seekResult = null;
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.KITKAT)
     @Override
     public void onMethodCall(final MethodCall call, final Result result) {
         ensurePlayerInitialized();
@@ -640,24 +643,32 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         String id = (String)map.get("id");
         switch ((String)map.get("type")) {
         case "progressive":
-            return new ProgressiveMediaSource.Factory(buildDataSourceFactory(id,mapGet(map, "headers"),mapGet(map, "resolver")), buildExtractorsFactory(mapGet(map, "options")))
+            return new ProgressiveMediaSource.Factory(buildDataSourceFactory(id,mapGet(map, "headers"),mapGet(map, "useResolver")), buildExtractorsFactory(mapGet(map, "options")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setTag(id)
                             .build());
         case "dash":
-            return new DashMediaSource.Factory(buildDataSourceFactory(id,mapGet(map, "headers"),mapGet(map, "resolver")))
+            return new DashMediaSource.Factory(buildDataSourceFactory(id,mapGet(map, "headers"),mapGet(map, "useResolver")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setMimeType(MimeTypes.APPLICATION_MPD)
                             .setTag(id)
                             .build());
         case "hls":
-            return new HlsMediaSource.Factory(buildDataSourceFactory(id,mapGet(map, "headers"),mapGet(map, "resolver")))
+            return new HlsMediaSource.Factory(buildDataSourceFactory(id,mapGet(map, "headers"),mapGet(map, "useResolver")))
                     .createMediaSource(new MediaItem.Builder()
                             .setUri(Uri.parse((String)map.get("uri")))
                             .setMimeType(MimeTypes.APPLICATION_M3U8)
                             .build());
+        case "mapping":
+            return new MaskingMediaSource(
+                    new LazyMediaSource(this, id,
+                            new MediaItem.Builder()
+                            .setTag(id)
+                            .build()
+                    ),true
+            );
         case "silence":
             return new SilenceMediaSource.Factory()
                     .setDurationUs(getLong(map.get("duration")))
@@ -733,7 +744,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         audioEffectsMap.clear();
     }
 
-    private DataSource.Factory buildDataSourceFactory(String id,Map<?, ?> headers, String resolver) {
+    private DataSource.Factory buildDataSourceFactory(String id,Map<?, ?> headers, boolean useResolver) {
         final Map<String, String> stringHeaders = castToStringMap(headers);
         String userAgent = null;
         if (stringHeaders != null) {
@@ -751,14 +762,14 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         if (stringHeaders != null && !stringHeaders.isEmpty()) {
             httpDataSourceFactory.setDefaultRequestProperties(stringHeaders);
         }
-        DataSource.Factory factory = getHttpFactory(id,resolver, httpDataSourceFactory);
+        DataSource.Factory factory = getHttpFactory(id,useResolver, httpDataSourceFactory);
 
         return new DefaultDataSource.Factory(context, factory);
     }
 
-    private DataSource.Factory getHttpFactory(String id,String resolver, DefaultHttpDataSource.Factory httpDataSourceFactory) {
+    private DataSource.Factory getHttpFactory(String id,boolean useResolver, DefaultHttpDataSource.Factory httpDataSourceFactory) {
         DataSource.Factory factory;
-        if(resolver ==null){
+        if(!useResolver){
             factory= httpDataSourceFactory;
         }
         else{
@@ -786,9 +797,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                                 future.completeExceptionally(new Throwable("Method not implemented."));
                             }
                         };
-                        HashMap<String, Object> arguments = new HashMap<>();
-                        arguments.put("id", id);
-                        methodChannel.invokeMethod("resolveURI",arguments,result);
+                        methodChannel.invokeMethod("resolveURI",Collections.singletonMap("id", id),result);
                     });
                     try {
                         String newURI = future.get();
@@ -803,6 +812,30 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
             factory = new ResolvingDataSource.Factory(new DefaultHttpDataSource.Factory(),resolver2);
         }
         return factory;
+    }
+
+    @Override
+    @RequiresApi(api = Build.VERSION_CODES.N)
+    public void createMediaSource(String id, CompletableFuture<MediaSource> receiver) {
+        handler.post(() -> {
+            methodChannel.invokeMethod("createMappedAudioSourceSource", Collections.singletonMap("id", id), new Result() {
+                @Override
+                public void success(Object json) {
+                    final MediaSource mediaSource = json == null ? null : decodeAudioSource(json);
+                    receiver.complete(mediaSource);
+                }
+
+                @Override
+                public void error(String errorCode, String errorMessage, Object errorDetails) {
+                    receiver.completeExceptionally(new IllegalStateException("createMappedAudioSourceSource failed. Cannot proceed. (" + errorCode + ", " + errorMessage + ", " + errorDetails + ")"));
+                }
+
+                @Override
+                public void notImplemented() {
+                    receiver.completeExceptionally(new IllegalArgumentException("createMappedAudioSourceSource is not implemented by the platform."));
+                }
+            });
+        });
     }
 
     private void load(final List<MediaSource> mediaSources, ShuffleOrder shuffleOrder, final long initialPosition, final Integer initialIndex, final Result result) {
@@ -879,6 +912,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
         audioEffectsMap.get(type).setEnabled(enabled);
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.KITKAT)
     private void loudnessEnhancerSetTargetGain(double targetGain) {
         int targetGainMillibels = (int)Math.round(targetGain * 100.0); // target gain needs to be provided in milliBel, the user provides the value in deciBel
         ((LoudnessEnhancer)audioEffectsMap.get("AndroidLoudnessEnhancer")).setTargetGain(targetGainMillibels);
