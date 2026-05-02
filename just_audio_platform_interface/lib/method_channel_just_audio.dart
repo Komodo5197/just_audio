@@ -49,7 +49,9 @@ class MethodChannelAudioPlayer extends AudioPlayerPlatform {
         return message.toMap();
       case 'resolveURI':
         final id = (call.arguments as Map)['id'] as String;
-        return await _resolver(id);
+        final oldURI = (call.arguments as Map)['oldURI'] as String;
+        final newURI = _resolver(id, Uri.parse(oldURI));
+        return newURI.toString();
       default:
         throw UnimplementedError('Unimplemented method: ${call.method}');
     }

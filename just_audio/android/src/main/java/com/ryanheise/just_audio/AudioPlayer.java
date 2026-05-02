@@ -34,7 +34,6 @@ import androidx.media3.common.AudioAttributes;
 import androidx.media3.exoplayer.NoSampleRenderer;
 import androidx.media3.exoplayer.Renderer;
 import androidx.media3.exoplayer.RenderersFactory;
-import androidx.media3.exoplayer.source.MaskingMediaSource;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.common.Metadata;
 import androidx.media3.exoplayer.metadata.MetadataOutput;
@@ -63,7 +62,6 @@ import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -75,7 +73,7 @@ import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-public class AudioPlayer implements MethodCallHandler, Player.Listener, MetadataOutput, LazyMediaSourceProvider {
+public class AudioPlayer implements MethodCallHandler, Player.Listener, MetadataOutput, LazyMediaSource2.LazyMediaSourceProvider {
     public static final int ERROR_ABORT = 10000000;
 
     static final String TAG = "AudioPlayer";
@@ -662,13 +660,8 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                             .setMimeType(MimeTypes.APPLICATION_M3U8)
                             .build());
         case "mapping":
-            return new MaskingMediaSource(
-                    new LazyMediaSource(this, id,
-                            new MediaItem.Builder()
-                            .setTag(id)
-                            .build()
-                    ),true
-            );
+            // We rely on exoplayer having lazy preparation enabled to delay preparing this
+            return new LazyMediaSource2(this, id);
         case "silence":
             return new SilenceMediaSource.Factory()
                     .setDurationUs(getLong(map.get("duration")))
@@ -777,7 +770,7 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                 @NonNull
                 @RequiresApi(api = Build.VERSION_CODES.N)
                 @Override
-                public DataSpec resolveDataSpec(DataSpec dataSpec) throws IOException {
+                public DataSpec resolveDataSpec(DataSpec dataSpec) {
                     CompletableFuture<String> future = new CompletableFuture<>();
                     handler.post(() -> {
                         Result result = new Result() {
@@ -797,12 +790,13 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
                                 future.completeExceptionally(new Throwable("Method not implemented."));
                             }
                         };
-                        methodChannel.invokeMethod("resolveURI",Collections.singletonMap("id", id),result);
+                        methodChannel.invokeMethod("resolveURI",Map.of("id",id,"oldURI", dataSpec.uri.toString()),result);
                     });
                     try {
                         String newURI = future.get();
                         return dataSpec.withUri(Uri.parse(newURI));
                     } catch (ExecutionException e) {
+                        Log.e(TAG,"Could not resolve data source due to error "+e.toString()+". Original URI "+dataSpec.toString());
                         return dataSpec;
                     } catch (InterruptedException e) {
                         return dataSpec;
@@ -815,24 +809,24 @@ public class AudioPlayer implements MethodCallHandler, Player.Listener, Metadata
     }
 
     @Override
-    @RequiresApi(api = Build.VERSION_CODES.N)
-    public void createMediaSource(String id, CompletableFuture<MediaSource> receiver) {
+    public void createMediaSource(String id, LazyMediaSource2.LazyMediaSourceReceiver receiver) {
         handler.post(() -> {
             methodChannel.invokeMethod("createMappedAudioSourceSource", Collections.singletonMap("id", id), new Result() {
                 @Override
                 public void success(Object json) {
                     final MediaSource mediaSource = json == null ? null : decodeAudioSource(json);
-                    receiver.complete(mediaSource);
+                    receiver.onMediaSourceCreated(mediaSource);
                 }
 
                 @Override
-                public void error(String errorCode, String errorMessage, Object errorDetails) {
-                    receiver.completeExceptionally(new IllegalStateException("createMappedAudioSourceSource failed. Cannot proceed. (" + errorCode + ", " + errorMessage + ", " + errorDetails + ")"));
+                public void error(@NonNull String errorCode, String errorMessage, Object errorDetails) {
+                    Log.e(TAG,"createMappedAudioSourceSource failed. Cannot proceed. (" + errorCode + ", " + errorMessage + ", " + errorDetails + ")");
+                    receiver.onMediaSourceCreated(null);
                 }
 
                 @Override
                 public void notImplemented() {
-                    receiver.completeExceptionally(new IllegalArgumentException("createMappedAudioSourceSource is not implemented by the platform."));
+                    throw new IllegalArgumentException("createMappedAudioSourceSource is not implemented by the platform.");
                 }
             });
         });

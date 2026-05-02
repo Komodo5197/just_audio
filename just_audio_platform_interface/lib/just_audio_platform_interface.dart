@@ -4,7 +4,7 @@ import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
 import 'method_channel_just_audio.dart';
 
-typedef URIResolverCallback = Future<String> Function(String id);
+typedef URIResolverCallback = Uri Function(String id, Uri oldURI);
 typedef MappingAudioSourceCallback = Future<AudioSourceMessage> Function(String id);
 
 /// The interface that implementations of just_audio must implement.

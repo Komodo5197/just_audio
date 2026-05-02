@@ -1539,14 +1539,13 @@ class AudioPlayer {
                 androidOffloadSchedulingEnabled: _androidOffloadSchedulingEnabled,
                 androidAudioOffloadPreferences: _androidAudioOffloadPreferences?._toMessage(),
                 useLazyPreparation: _playlist.useLazyPreparation,
-                resolverCallback: (id) async {
+                resolverCallback: (id, oldURI) {
                   assert(_audioSources.containsKey(id), 'Audio source with ID $id does not exist!');
                   assert(_audioSources[id]! is UriAudioSource, 'Audio source with ID $id is not a UriAudioSource!');
                   assert((_audioSources[id]! as UriAudioSource).resolver != null,
                       'Audio source with ID $id does not have a resolver method set!');
                   final source = _audioSources[id]! as UriAudioSource;
-                  final updatedURI = await source.resolver!(source._effectiveUri);
-                  return updatedURI.toString();
+                  return source.resolver!(oldURI);
                 },
                 mappingCallback: (id) async {
                   assert(_audioSources.containsKey(id), 'Audio source with ID $id does not exist!');
@@ -2582,7 +2581,7 @@ abstract class IndexedAudioSource extends AudioSource {
   List<int> get shuffleIndices => [0];
 }
 
-typedef URIResolver = Future<Uri> Function(Uri originalURI);
+typedef URIResolver = Uri Function(Uri originalURI);
 
 /// An abstract class representing audio sources that are loaded from a URI.
 abstract class UriAudioSource extends IndexedAudioSource {
@@ -2590,8 +2589,8 @@ abstract class UriAudioSource extends IndexedAudioSource {
   final Map<String, String>? headers;
 
   /// A function called to update the URI every time a chunk of the resource is loaded.
-  /// This should always resolve to the same resource to allow playback to function correctly.
-  /// The original uri is used as a fallback if resolution fails, and is also supplied as an argument for convenience.
+  /// This could be called very frequently, and may not be resolving the original URI supplied to this AudioSource.
+  /// The original uri is used as a fallback if resolution fails.
   /// Only supported on android.
   final URIResolver? resolver;
   Uri? _overrideUri;
